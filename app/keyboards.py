@@ -82,7 +82,16 @@ def delete_post_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [btn("Оплатить 50 звезд", callback_data="delete_post_pay", emoji="send_money")],
+            [btn("Проверить оплату", callback_data="delete_post_check_payment", emoji="check")],
             [btn("Назад", callback_data="main_menu")],
+        ]
+    )
+
+
+def delete_post_confirm_keyboard(request_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [btn("Подтвердить удаление", callback_data=f"delete_post_confirm:{request_id}", emoji="check")],
         ]
     )
 

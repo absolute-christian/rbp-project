@@ -69,6 +69,41 @@ class Database:
 
             CREATE INDEX IF NOT EXISTS idx_tickets_created
                 ON tickets(created_at DESC);
+
+            CREATE TABLE IF NOT EXISTS payments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+                amount INTEGER NOT NULL,
+                currency TEXT NOT NULL,
+                payload TEXT NOT NULL,
+                telegram_payment_charge_id TEXT NOT NULL UNIQUE,
+                provider_payment_charge_id TEXT,
+                used_at TEXT,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_payments_user_recent
+                ON payments(user_id, created_at DESC);
+
+            CREATE TABLE IF NOT EXISTS delete_post_requests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+                payment_id INTEGER NOT NULL REFERENCES payments(id) ON DELETE RESTRICT,
+                post_url TEXT NOT NULL,
+                target_chat_id TEXT NOT NULL,
+                target_message_id INTEGER NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending'
+                    CHECK (status IN ('pending', 'done', 'failed')),
+                admin_chat_id INTEGER,
+                admin_message_id INTEGER,
+                review_admin_id INTEGER,
+                error_text TEXT,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_delete_post_requests_status
+                ON delete_post_requests(status, created_at DESC);
             """
         )
         await self._ensure_ticket_columns()
@@ -302,6 +337,148 @@ class Database:
             "UPDATE users SET is_blocked = 1, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?",
             user_id,
         )
+
+    async def record_payment(
+        self,
+        user_id: int,
+        amount: int,
+        currency: str,
+        payload: str,
+        telegram_payment_charge_id: str,
+        provider_payment_charge_id: str | None,
+    ) -> None:
+        await self.execute(
+            """
+            INSERT OR IGNORE INTO payments (
+                user_id,
+                amount,
+                currency,
+                payload,
+                telegram_payment_charge_id,
+                provider_payment_charge_id
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            user_id,
+            amount,
+            currency,
+            payload,
+            telegram_payment_charge_id,
+            provider_payment_charge_id,
+        )
+
+    async def get_recent_unused_delete_payment(
+        self,
+        user_id: int,
+        minutes: int = 60,
+    ) -> aiosqlite.Row | None:
+        return await self.fetchrow(
+            """
+            SELECT *
+            FROM payments
+            WHERE user_id = ?
+              AND payload LIKE 'delete_post:%'
+              AND amount = 50
+              AND currency = 'XTR'
+              AND used_at IS NULL
+              AND created_at >= datetime('now', ?)
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            user_id,
+            f"-{minutes} minutes",
+        )
+
+    async def create_delete_post_request(
+        self,
+        user_id: int,
+        payment_id: int,
+        post_url: str,
+        target_chat_id: str,
+        target_message_id: int,
+    ) -> aiosqlite.Row:
+        assert self.conn is not None
+        row = await self.fetchrow(
+            """
+            INSERT INTO delete_post_requests (
+                user_id,
+                payment_id,
+                post_url,
+                target_chat_id,
+                target_message_id
+            )
+            VALUES (?, ?, ?, ?, ?)
+            RETURNING *
+            """,
+            user_id,
+            payment_id,
+            post_url,
+            target_chat_id,
+            target_message_id,
+        )
+        await self.conn.execute(
+            "UPDATE payments SET used_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (payment_id,),
+        )
+        await self.conn.commit()
+        assert row is not None
+        return row
+
+    async def set_delete_post_admin_message(
+        self,
+        request_id: int,
+        admin_chat_id: int,
+        admin_message_id: int,
+    ) -> None:
+        await self.execute(
+            """
+            UPDATE delete_post_requests
+            SET admin_chat_id = ?,
+                admin_message_id = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            admin_chat_id,
+            admin_message_id,
+            request_id,
+        )
+
+    async def get_delete_post_request(self, request_id: int) -> aiosqlite.Row | None:
+        return await self.fetchrow(
+            """
+            SELECT *
+            FROM delete_post_requests
+            WHERE id = ?
+              AND status = 'pending'
+            """,
+            request_id,
+        )
+
+    async def finish_delete_post_request(
+        self,
+        request_id: int,
+        admin_id: int,
+        status: str,
+        error_text: str | None = None,
+    ) -> aiosqlite.Row | None:
+        row = await self.fetchrow(
+            """
+            UPDATE delete_post_requests
+            SET status = ?,
+                review_admin_id = ?,
+                error_text = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+              AND status = 'pending'
+            RETURNING *
+            """,
+            status,
+            admin_id,
+            error_text,
+            request_id,
+        )
+        await self._commit()
+        return row
 
     async def stats(self) -> aiosqlite.Row:
         row = await self.fetchrow(

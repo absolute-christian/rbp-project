@@ -64,7 +64,22 @@ def application_prompt(title: str = "Анкеточка", body: str | None = Non
 def delete_post_text() -> str:
     return (
         f"<b>{EMOJI_TRASH} Удалить пост проверки</b>\n\n"
-        "Оплата через звезды. После платежа напишите админам детали поста через кнопку связи и прикрепите скрин с оплатой"
+        "Оплатите 50 звезд, затем нажмите Проверить оплату. После проверки бот попросит ссылку на пост."
+    )
+
+
+def delete_post_link_prompt() -> str:
+    return (
+        f"{EMOJI_LINK} <b>Оплата найдена</b>\n\n"
+        "Теперь отправьте ссылку на пост, который нужно удалить."
+    )
+
+
+def delete_post_admin_text(request_id: int, user: User, post_url: str) -> str:
+    return (
+        f"<b>{EMOJI_TRASH} Удаление поста {request_id} от {user_label(user)}</b>\n"
+        f"{EMOJI_TAG} <b>удаление поста</b>\n\n"
+        f"{escape(post_url)}"
     )
 
 
