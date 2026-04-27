@@ -11,6 +11,7 @@ from app.emojis import (
     EMOJI_CROSS,
     EMOJI_FILE,
     EMOJI_HEART,
+    EMOJI_LINK,
     EMOJI_MEGAPHONE,
     EMOJI_PEOPLE,
     EMOJI_PERSON_NO,
