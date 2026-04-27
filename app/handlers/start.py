@@ -17,7 +17,8 @@ from app.keyboards import (
     delete_post_keyboard,
 )
 from app.states import ApplicationForm, ComplaintForm
-from app.texts import active_ticket_text, application_prompt, complaint_prompt, delete_post_text
+from app.states import DeletePostForm
+from app.texts import active_ticket_text, application_prompt, complaint_prompt, delete_post_link_prompt, delete_post_text
 from app.ui import send_welcome
 
 router = Router(name="start")
@@ -46,6 +47,12 @@ async def cb_main_menu(cb: CallbackQuery, bot: Bot, state: FSMContext, db: Datab
 async def msg_delete_post(message: Message, state: FSMContext, db: Database, config: Config) -> None:
     await state.clear()
     await db.upsert_user(message.from_user, is_admin=message.from_user.id in config.admin_ids)
+    if message.from_user.id in config.admin_ids:
+        await state.set_state(DeletePostForm.waiting_for_link)
+        await state.update_data(delete_payment_id=None, admin_skip_payment=True)
+        await message.answer(delete_post_link_prompt(), reply_markup=cancel_keyboard())
+        return
+
     await message.answer(delete_post_text(), reply_markup=delete_post_keyboard())
 
 

@@ -88,7 +88,7 @@ class Database:
             CREATE TABLE IF NOT EXISTS delete_post_requests (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
-                payment_id INTEGER NOT NULL REFERENCES payments(id) ON DELETE RESTRICT,
+                payment_id INTEGER REFERENCES payments(id) ON DELETE RESTRICT,
                 post_url TEXT NOT NULL,
                 target_chat_id TEXT NOT NULL,
                 target_message_id INTEGER NOT NULL,
@@ -107,6 +107,7 @@ class Database:
             """
         )
         await self._ensure_ticket_columns()
+        await self._ensure_delete_post_requests_schema()
         await self.conn.commit()
 
     async def execute(self, query: str, *args: Any) -> None:
@@ -392,7 +393,7 @@ class Database:
     async def create_delete_post_request(
         self,
         user_id: int,
-        payment_id: int,
+        payment_id: int | None,
         post_url: str,
         target_chat_id: str,
         target_message_id: int,
@@ -416,10 +417,11 @@ class Database:
             target_chat_id,
             target_message_id,
         )
-        await self.conn.execute(
-            "UPDATE payments SET used_at = CURRENT_TIMESTAMP WHERE id = ?",
-            (payment_id,),
-        )
+        if payment_id is not None:
+            await self.conn.execute(
+                "UPDATE payments SET used_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (payment_id,),
+            )
         await self.conn.commit()
         assert row is not None
         return row
@@ -510,3 +512,80 @@ class Database:
             await self.conn.execute("ALTER TABLE tickets ADD COLUMN user_status_message_id INTEGER")
         if "kind_label" not in columns:
             await self.conn.execute("ALTER TABLE tickets ADD COLUMN kind_label TEXT")
+
+    async def _ensure_delete_post_requests_schema(self) -> None:
+        assert self.conn is not None
+        cursor = await self.conn.execute("PRAGMA table_info(delete_post_requests)")
+        try:
+            columns = await cursor.fetchall()
+        finally:
+            await cursor.close()
+
+        if not columns:
+            return
+
+        payment_column = next((row for row in columns if row["name"] == "payment_id"), None)
+        if payment_column and payment_column["notnull"]:
+            await self.conn.executescript(
+                """
+                PRAGMA foreign_keys = OFF;
+
+                CREATE TABLE IF NOT EXISTS delete_post_requests_new (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+                    payment_id INTEGER REFERENCES payments(id) ON DELETE RESTRICT,
+                    post_url TEXT NOT NULL,
+                    target_chat_id TEXT NOT NULL,
+                    target_message_id INTEGER NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending'
+                        CHECK (status IN ('pending', 'done', 'failed')),
+                    admin_chat_id INTEGER,
+                    admin_message_id INTEGER,
+                    review_admin_id INTEGER,
+                    error_text TEXT,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+
+                INSERT INTO delete_post_requests_new (
+                    id,
+                    user_id,
+                    payment_id,
+                    post_url,
+                    target_chat_id,
+                    target_message_id,
+                    status,
+                    admin_chat_id,
+                    admin_message_id,
+                    review_admin_id,
+                    error_text,
+                    created_at,
+                    updated_at
+                )
+                SELECT
+                    id,
+                    user_id,
+                    payment_id,
+                    post_url,
+                    target_chat_id,
+                    target_message_id,
+                    status,
+                    admin_chat_id,
+                    admin_message_id,
+                    review_admin_id,
+                    error_text,
+                    created_at,
+                    updated_at
+                FROM delete_post_requests;
+
+                DROP TABLE delete_post_requests;
+                ALTER TABLE delete_post_requests_new RENAME TO delete_post_requests;
+                PRAGMA foreign_keys = ON;
+                """
+            )
+            await self.conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_delete_post_requests_status
+                    ON delete_post_requests(status, created_at DESC)
+                """
+            )

@@ -106,7 +106,8 @@ async def msg_delete_post_link(
 
     data = await state.get_data()
     payment_id = data.get("delete_payment_id")
-    if not payment_id:
+    admin_skip_payment = bool(data.get("admin_skip_payment"))
+    if payment_id is None and not admin_skip_payment:
         await state.clear()
         await message.answer("Оплата не найдена. Нажмите Проверить оплату еще раз.")
         return
@@ -114,7 +115,7 @@ async def msg_delete_post_link(
     target_chat_id, target_message_id = parsed
     request = await db.create_delete_post_request(
         message.from_user.id,
-        int(payment_id),
+        int(payment_id) if payment_id is not None else None,
         post_url.strip(),
         target_chat_id,
         target_message_id,
